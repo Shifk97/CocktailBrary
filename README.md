@@ -87,3 +87,9 @@ services:
     volumes:
       - ./cocktailbrary/data:/data
 ```
+
+---
+
+### NOTAS FINALES
+
+Este proyecto ha sido creado para satisfacer un problema personal y comprobar el rendimiento y capacidades de las herramientas de IA. No se mantendrá más allá de las necesidades personales. Si se desea ampliar o modificar, se puede hacer un fork de este proyecto.

@@ -1,17 +1,31 @@
 import React from "react";
 import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Cell } from "recharts";
 
-export default function DashboardTab({ recipes, ingredients, availableCount }) {
+export default function DashboardTab({ recipes, ingredients, categories, availableCount }) {
   const totalMade = recipes.reduce((s, r) => s + (r.timesMade || 0), 0);
   const topRecipes = [...recipes].sort((a, b) => (b.timesMade || 0) - (a.timesMade || 0)).slice(0, 5);
 
   const usage = {};
   recipes.forEach((r) => {
     const weight = r.timesMade || 0;
-    r.mainIngredients.forEach((mi) => { usage[mi.ingredientId] = (usage[mi.ingredientId] || 0) + Math.max(1, weight); });
+    r.mainIngredients.forEach((mi) => {
+      const key = mi.categoryId ? `cat:${mi.categoryId}` : `ing:${mi.ingredientId}`;
+      usage[key] = (usage[key] || 0) + Math.max(1, weight);
+    });
   });
   const topIngredients = Object.entries(usage)
-    .map(([id, count]) => ({ name: (ingredients.find((i) => i.id === id) || {}).name || "?", count }))
+    .map(([key, count]) => {
+      const id = key.slice(4);
+      let name;
+      if (key.startsWith("cat:")) {
+        const cat = (categories || []).find((c) => c.id === id);
+        name = cat ? cat.name : "Categoría eliminada";
+      } else {
+        const ing = ingredients.find((i) => i.id === id);
+        name = ing ? ing.name : "Ingrediente eliminado";
+      }
+      return { name, count };
+    })
     .sort((a, b) => b.count - a.count)
     .slice(0, 6);
 

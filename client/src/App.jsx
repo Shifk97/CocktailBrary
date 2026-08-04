@@ -3,7 +3,7 @@ import {
   Home, LayoutDashboard, Package, BookOpen, ShoppingCart, Settings,
   Plus, Minus, X, Camera, Check, Trash2, ChevronDown, ChevronRight,
   Martini, Sun, Moon, Search, LogOut, Lock, User as UserIcon, ExternalLink, Copy, GripVertical, Download, Upload, Maximize2,
-  Wine, Image as ImageIcon, Pencil
+  Wine, Image as ImageIcon, Pencil, ArrowDownAZ
 } from "lucide-react";
 import { api, getToken, setToken } from "./api.js";
 
@@ -463,6 +463,13 @@ function CocktailApp({ username, onLogout }) {
       return next;
     });
   }
+  function sortInventoryAlphabetically() {
+    // Ordenar toda la lista de ingredientes por nombre hace que, al filtrar por
+    // categoría (o los sueltos) para pintarlos, cada subconjunto salga ya alfabético.
+    setCategories((prev) => [...prev].sort((a, b) => a.name.localeCompare(b.name, "es")));
+    setIngredients((prev) => [...prev].sort((a, b) => a.name.localeCompare(b.name, "es")));
+    showToast("Inventario ordenado alfabéticamente");
+  }
   function setCategoryDefault(categoryId, ingredientId) {
     setCategories((prev) => prev.map((c) => (c.id === categoryId ? { ...c, defaultIngredientId: ingredientId } : c)));
   }
@@ -720,7 +727,7 @@ function CocktailApp({ username, onLogout }) {
         )}
         {tab === "dashboard" && (
           <Suspense fallback={<p className="page-sub">Cargando métricas…</p>}>
-            <DashboardTab recipes={recipes} ingredients={ingredients} availableCount={availableRecipes.length} />
+            <DashboardTab recipes={recipes} ingredients={ingredients} categories={categories} availableCount={availableRecipes.length} />
           </Suspense>
         )}
         {tab === "inventario" && (
@@ -741,6 +748,7 @@ function CocktailApp({ username, onLogout }) {
             onDeleteCategory={deleteCategory}
             onReorderCategories={reorderCategories}
             onSetDefault={setCategoryDefault}
+            onSortAlphabetically={sortInventoryAlphabetically}
           />
         )}
         {tab === "recetas" && (
@@ -952,7 +960,7 @@ function IngredientRow({ ing, draggable, isDragging, isOver, dragHandlers, onEdi
 
 function InventarioTab({
   ingredients, categories, search, setSearch, onAdjust, onSet, onEdit, onDelete, onNew, onAddToShopping, onReorder,
-  onNewCategory, onEditCategory, onDeleteCategory, onReorderCategories, onSetDefault,
+  onNewCategory, onEditCategory, onDeleteCategory, onReorderCategories, onSetDefault, onSortAlphabetically,
 }) {
   const [dragId, setDragId] = useState(null);
   const [overId, setOverId] = useState(null);
@@ -1005,6 +1013,7 @@ function InventarioTab({
       <header className="page-header page-header-row">
         <div><h1>Inventario</h1><p className="page-sub">{ingredients.length} ingredientes en la barra.</p></div>
         <div className="header-btn-group">
+          <button className="btn btn-ghost" title="Ordenar alfabéticamente (categorías primero)" onClick={onSortAlphabetically}><ArrowDownAZ size={16} /> Ordenar A-Z</button>
           <button className="btn btn-ghost" onClick={onNewCategory}><Plus size={16} /> Categoría</button>
           <button className="btn btn-primary" onClick={() => onNew()}><Plus size={16} /> Ingrediente</button>
         </div>
@@ -1197,10 +1206,7 @@ function IngredientForm({ initial, recipes, categories, onCancel, onSave }) {
 
         {categories && categories.length > 0 && (
           <Field label="Categoría (opcional, ej. varias marcas de Bourbon)">
-            <select value={categoryId} onChange={(e) => handleCategoryChange(e.target.value)}>
-              <option value="">Ninguna — producto suelto</option>
-              {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </select>
+            <CategoryCombo categories={categories} value={categoryId} onChange={handleCategoryChange} placeholder="Buscar categoría, o dejar en blanco…" />
           </Field>
         )}
 
@@ -1358,6 +1364,51 @@ function resolveSlotRef({ activeId, query, ingredients, categories, onCreateIngr
     if (created) return { kind: "ingredient", id: created.id };
   }
   return null;
+}
+
+function CategoryCombo({ categories, value, onChange, placeholder }) {
+  const [query, setQuery] = useState("");
+  const [open, setOpen] = useState(false);
+  const boxRef = useRef(null);
+
+  useEffect(() => {
+    const selected = categories.find((c) => c.id === value);
+    setQuery(selected ? selected.name : "");
+  }, [value, categories]);
+
+  useEffect(() => {
+    function onClickOutside(e) {
+      if (boxRef.current && !boxRef.current.contains(e.target)) {
+        setOpen(false);
+        const selected = categories.find((c) => c.id === value);
+        setQuery(selected ? selected.name : "");
+      }
+    }
+    document.addEventListener("mousedown", onClickOutside);
+    return () => document.removeEventListener("mousedown", onClickOutside);
+  }, [value, categories]);
+
+  const q = query.trim().toLowerCase();
+  const matches = q ? categories.filter((c) => c.name.toLowerCase().includes(q)) : categories;
+
+  function choose(cat) {
+    setQuery(cat ? cat.name : "");
+    onChange(cat ? cat.id : "");
+    setOpen(false);
+  }
+
+  return (
+    <div className="combo" ref={boxRef}>
+      <input value={query} onChange={(e) => { setQuery(e.target.value); setOpen(true); }} onFocus={() => setOpen(true)} placeholder={placeholder} />
+      {open && (
+        <div className="combo-dropdown">
+          <div className="combo-option" onClick={() => choose(null)}>Ninguna — producto suelto</div>
+          {matches.map((c) => <div key={c.id} className="combo-option" onClick={() => choose(c)}>{c.name}</div>)}
+          {q && matches.length === 0 && <div className="combo-empty">Sin categorías que coincidan</div>}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function OptionCombo({ options, value, onChange, placeholder }) {

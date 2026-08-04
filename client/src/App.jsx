@@ -360,6 +360,7 @@ function CocktailApp({ username, onLogout }) {
   const [editingManual, setEditingManual] = useState(null);
   const [viewingManual, setViewingManual] = useState(null);
   const [showCategoryForm, setShowCategoryForm] = useState(false);
+  const [editingCategory, setEditingCategory] = useState(null);
 
   useEffect(() => {
     (async () => {
@@ -735,7 +736,8 @@ function CocktailApp({ username, onLogout }) {
             onNew={(categoryId) => { setEditingIng(categoryId ? { categoryId, unit: categoriesById[categoryId]?.unit || "ml" } : null); setShowIngForm(true); }}
             onAddToShopping={addIngredientToShoppingList}
             onReorder={reorderIngredients}
-            onNewCategory={() => setShowCategoryForm(true)}
+            onNewCategory={() => { setEditingCategory(null); setShowCategoryForm(true); }}
+            onEditCategory={(cat) => { setEditingCategory(cat); setShowCategoryForm(true); }}
             onDeleteCategory={deleteCategory}
             onReorderCategories={reorderCategories}
             onSetDefault={setCategoryDefault}
@@ -784,7 +786,12 @@ function CocktailApp({ username, onLogout }) {
         <IngredientForm initial={editingIng} recipes={recipes} categories={categories} onCancel={() => { setShowIngForm(false); setEditingIng(null); }} onSave={saveIngredient} />
       )}
       {showCategoryForm && (
-        <CategoryForm onCancel={() => setShowCategoryForm(false)} onSave={saveCategory} />
+        <CategoryForm
+          initial={editingCategory}
+          hasMembers={editingCategory ? ingredients.some((i) => i.categoryId === editingCategory.id) : false}
+          onCancel={() => { setShowCategoryForm(false); setEditingCategory(null); }}
+          onSave={(data) => { saveCategory(data); setEditingCategory(null); }}
+        />
       )}
       {showRecipeForm && (
         <RecipeForm initial={editingRecipe} ingredients={ingredients} ingredientCategories={categories} onCancel={() => { setShowRecipeForm(false); setEditingRecipe(null); }} onSave={saveRecipe} onCreateIngredient={findOrCreateIngredient} />
@@ -945,14 +952,15 @@ function IngredientRow({ ing, draggable, isDragging, isOver, dragHandlers, onEdi
 
 function InventarioTab({
   ingredients, categories, search, setSearch, onAdjust, onSet, onEdit, onDelete, onNew, onAddToShopping, onReorder,
-  onNewCategory, onDeleteCategory, onReorderCategories, onSetDefault,
+  onNewCategory, onEditCategory, onDeleteCategory, onReorderCategories, onSetDefault,
 }) {
   const [dragId, setDragId] = useState(null);
   const [overId, setOverId] = useState(null);
   const [dragCatId, setDragCatId] = useState(null);
   const [overCatId, setOverCatId] = useState(null);
   const [collapsed, setCollapsed] = useState(() => new Set());
-  const isSearching = search.trim().length > 0;
+  const q = search.trim().toLowerCase();
+  const isSearching = q.length > 0;
 
   function toggleCollapsed(id) {
     setCollapsed((prev) => {
@@ -972,28 +980,25 @@ function InventarioTab({
     };
   }
 
-  if (isSearching) {
-    const filtered = ingredients.filter((i) => i.name.toLowerCase().includes(search.toLowerCase()));
-    return (
-      <div>
-        <header className="page-header page-header-row">
-          <div><h1>Inventario</h1><p className="page-sub">{ingredients.length} ingredientes en la barra.</p></div>
-          <div className="header-btn-group">
-            <button className="btn btn-ghost" onClick={onNewCategory}><Plus size={16} /> Categoría</button>
-            <button className="btn btn-primary" onClick={() => onNew()}><Plus size={16} /> Ingrediente</button>
-          </div>
-        </header>
-        <div className="search-box"><Search size={15} /><input placeholder="Buscar ingrediente…" value={search} onChange={(e) => setSearch(e.target.value)} /></div>
-        <div className="ing-list">
-          {filtered.map((ing) => (
-            <IngredientRow key={ing.id} ing={ing} draggable={false} onEdit={onEdit} onAdjust={onAdjust} onSet={onSet} onAddToShopping={onAddToShopping} onDelete={onDelete} />
-          ))}
-        </div>
-      </div>
-    );
-  }
+  // Al buscar, una categoría se muestra si su propio nombre coincide (en cuyo caso
+  // se ven todas sus marcas) o si alguna de sus marcas coincide (solo esas).
+  const visibleGroups = categories
+    .map((cat) => {
+      const allMembers = ingredients.filter((i) => i.categoryId === cat.id);
+      if (!isSearching) return { cat, allMembers, visibleMembers: allMembers };
+      const catNameMatches = cat.name.toLowerCase().includes(q);
+      const matchingMembers = allMembers.filter((i) => i.name.toLowerCase().includes(q));
+      if (catNameMatches) return { cat, allMembers, visibleMembers: allMembers };
+      if (matchingMembers.length > 0) return { cat, allMembers, visibleMembers: matchingMembers };
+      return null;
+    })
+    .filter(Boolean);
 
-  const ungrouped = ingredients.filter((i) => !i.categoryId);
+  const ungrouped = ingredients
+    .filter((i) => !i.categoryId)
+    .filter((i) => !isSearching || i.name.toLowerCase().includes(q));
+
+  const nothingFound = isSearching && visibleGroups.length === 0 && ungrouped.length === 0;
 
   return (
     <div>
@@ -1005,48 +1010,50 @@ function InventarioTab({
         </div>
       </header>
 
-      <div className="search-box"><Search size={15} /><input placeholder="Buscar ingrediente…" value={search} onChange={(e) => setSearch(e.target.value)} /></div>
+      <div className="search-box"><Search size={15} /><input placeholder="Buscar ingrediente o categoría…" value={search} onChange={(e) => setSearch(e.target.value)} /></div>
 
       {ingredients.length === 0 && categories.length === 0 ? (
         <Empty icon={Package} title="La barra está vacía" body="Crea a mano cada ingrediente la primera vez que lo compres. Luego ajustas cantidades con los botones + y −." />
+      ) : nothingFound ? (
+        <Empty icon={Search} title="Sin resultados" body="No hay ningún ingrediente ni categoría que coincida con la búsqueda." />
       ) : (
         <>
-          {(ingredients.length > 1 || categories.length > 1) && <p className="combo-hint" style={{ marginBottom: 14 }}>Arrastra el icono de la izquierda para reordenar.</p>}
+          {!isSearching && (ingredients.length > 1 || categories.length > 1) && <p className="combo-hint" style={{ marginBottom: 14 }}>Arrastra el icono de la izquierda para reordenar.</p>}
 
-          {categories.length > 0 && (
+          {visibleGroups.length > 0 && (
             <div className="cat-group-list">
-              {categories.map((cat) => {
-                const members = ingredients.filter((i) => i.categoryId === cat.id);
-                const total = members.reduce((s, i) => s + i.quantity, 0);
-                const isOpen = !collapsed.has(cat.id);
+              {visibleGroups.map(({ cat, allMembers, visibleMembers }) => {
+                const total = allMembers.reduce((s, i) => s + i.quantity, 0);
+                const isOpen = isSearching || !collapsed.has(cat.id);
                 return (
                   <div
                     key={cat.id}
                     className={`cat-group ${dragCatId === cat.id ? "ing-row-dragging" : ""} ${overCatId === cat.id && dragCatId && dragCatId !== cat.id ? "ing-row-over" : ""}`}
-                    draggable
+                    draggable={!isSearching}
                     onDragStart={() => setDragCatId(cat.id)}
-                    onDragOver={(e) => { e.preventDefault(); setOverCatId(cat.id); }}
+                    onDragOver={(e) => { if (!isSearching) { e.preventDefault(); setOverCatId(cat.id); } }}
                     onDragLeave={() => setOverCatId((cur) => (cur === cat.id ? null : cur))}
                     onDrop={(e) => { e.preventDefault(); if (dragCatId) onReorderCategories(dragCatId, cat.id); setDragCatId(null); setOverCatId(null); }}
                     onDragEnd={() => { setDragCatId(null); setOverCatId(null); }}
                   >
                     <div className="cat-group-header">
-                      <span className="drag-handle" title="Arrastra para reordenar"><GripVertical size={14} /></span>
+                      {!isSearching && <span className="drag-handle" title="Arrastra para reordenar"><GripVertical size={14} /></span>}
                       <button className="icon-btn" onClick={() => toggleCollapsed(cat.id)}>{isOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}</button>
                       <span className="cat-group-name" onClick={() => toggleCollapsed(cat.id)}>{cat.name}</span>
-                      <span className="cat-group-total">{members.length} marca{members.length === 1 ? "" : "s"} · {+total.toFixed(2)} {cat.unit} en total</span>
+                      <span className="cat-group-total">{allMembers.length} marca{allMembers.length === 1 ? "" : "s"} · {+total.toFixed(2)} {cat.unit} en total</span>
                       <button className="btn btn-ghost btn-sm" onClick={() => onNew(cat.id)}><Plus size={13} /> Producto</button>
+                      <button className="icon-btn" title="Editar categoría" onClick={() => onEditCategory(cat)}><Pencil size={14} /></button>
                       <button className="icon-btn" title="Eliminar categoría" onClick={() => onDeleteCategory(cat.id)}><Trash2 size={15} /></button>
                     </div>
                     {isOpen && (
                       <div className="cat-group-members">
-                        {members.length === 0 ? (
+                        {visibleMembers.length === 0 ? (
                           <p className="empty-body" style={{ margin: "4px 0 6px 30px" }}>Sin marcas todavía. Añade la primera con "Producto".</p>
-                        ) : members.map((ing) => (
+                        ) : visibleMembers.map((ing) => (
                           <IngredientRow
                             key={ing.id}
                             ing={ing}
-                            draggable
+                            draggable={!isSearching}
                             isDragging={dragId === ing.id}
                             isOver={overId === ing.id && dragId && dragId !== ing.id}
                             dragHandlers={ingDragHandlers(ing)}
@@ -1074,12 +1081,12 @@ function InventarioTab({
           )}
 
           {ungrouped.length > 0 && (
-            <div className="ing-list" style={{ marginTop: categories.length > 0 ? 18 : 0 }}>
+            <div className="ing-list" style={{ marginTop: visibleGroups.length > 0 ? 18 : 0 }}>
               {ungrouped.map((ing) => (
                 <IngredientRow
                   key={ing.id}
                   ing={ing}
-                  draggable
+                  draggable={!isSearching}
                   isDragging={dragId === ing.id}
                   isOver={overId === ing.id && dragId && dragId !== ing.id}
                   dragHandlers={ingDragHandlers(ing)}
@@ -1098,20 +1105,24 @@ function InventarioTab({
   );
 }
 
-function CategoryForm({ onCancel, onSave }) {
-  const [name, setName] = useState("");
-  const [unit, setUnit] = useState("ml");
+function CategoryForm({ initial, hasMembers, onCancel, onSave }) {
+  const [name, setName] = useState(initial?.name || "");
+  const [unit, setUnit] = useState(initial?.unit || "ml");
   return (
-    <Modal title="Nueva categoría" onClose={onCancel}>
+    <Modal title={initial ? "Editar categoría" : "Nueva categoría"} onClose={onCancel}>
       <div className="form">
         <Field label="Nombre"><input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="Bourbon" /></Field>
         <Field label="Unidad de todos los productos de esta categoría">
-          <select value={unit} onChange={(e) => setUnit(e.target.value)}>{UNITS.map((u) => <option key={u} value={u}>{u}</option>)}</select>
+          <select value={unit} onChange={(e) => setUnit(e.target.value)} disabled={hasMembers}>{UNITS.map((u) => <option key={u} value={u}>{u}</option>)}</select>
         </Field>
-        <p className="combo-hint">Todos los productos que metas dentro compartirán esta unidad, para que la suma total tenga sentido.</p>
+        {hasMembers ? (
+          <p className="combo-hint">La unidad no se puede cambiar porque ya hay productos dentro de esta categoría.</p>
+        ) : (
+          <p className="combo-hint">Todos los productos que metas dentro compartirán esta unidad, para que la suma total tenga sentido.</p>
+        )}
         <div className="form-actions">
           <button className="btn btn-ghost" onClick={onCancel}>Cancelar</button>
-          <button className="btn btn-primary" disabled={!name.trim()} onClick={() => onSave({ name: name.trim(), unit })}>Crear categoría</button>
+          <button className="btn btn-primary" disabled={!name.trim()} onClick={() => onSave({ id: initial?.id, name: name.trim(), unit })}>{initial ? "Guardar" : "Crear categoría"}</button>
         </div>
       </div>
     </Modal>

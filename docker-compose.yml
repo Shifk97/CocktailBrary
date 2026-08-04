@@ -1,0 +1,21 @@
+services:
+  coctelaria:
+    build: .
+    image: coctelaria-app:latest
+    container_name: coctelaria
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      # Cambia esto por un valor propio y secreto antes de usarlo en serio.
+      # Genera uno con: openssl rand -hex 32
+      JWT_SECRET: "${JWT_SECRET:-cambia-este-secreto-en-produccion}"
+      PORT: 3000
+      DB_PATH: /data/coctelaria.db
+      # Pon "false" para impedir que se creen usuarios nuevos desde la pantalla de login
+      ALLOW_REGISTRATION: "true"
+    volumes:
+      - coctelaria-data:/data
+
+volumes:
+  coctelaria-data:

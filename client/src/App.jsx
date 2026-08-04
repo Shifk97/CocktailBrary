@@ -161,55 +161,47 @@ function categoryMembersOrdered(categoryId, ingredients, category) {
   return [rec, ...members.filter((i) => i.id !== rec.id)];
 }
 
-// Resuelve una línea de receta que apunta a una categoría: recorre los miembros
-// (recomendado primero, luego de arriba a abajo) y usa el primero con stock suficiente.
-function resolveCategorySlot(ri, ingredients, categoriesById) {
-  const cat = categoriesById[ri.categoryId];
-  const ordered = cat ? categoryMembersOrdered(ri.categoryId, ingredients, cat) : [];
-  for (const ing of ordered) {
-    const needed = convertAmount(ri.amount, ri.unit, ing.unit);
-    if (ing.quantity >= needed) return { ok: true, chosen: ing, needed, isDefault: ing.id === cat.defaultIngredientId || !cat.defaultIngredientId };
+// Resuelve una referencia de receta (a un ingrediente concreto O a una categoría
+// completa) contra el stock actual. Se usa igual tanto para la línea principal
+// como para la alternativa, así que una alternativa también puede ser una categoría.
+function resolveSlot(ref, ingredients, ingredientsById, categoriesById) {
+  if (!ref) return null;
+  if (ref.categoryId) {
+    const cat = (categoriesById || {})[ref.categoryId];
+    const ordered = cat ? categoryMembersOrdered(ref.categoryId, ingredients, cat) : [];
+    for (const ing of ordered) {
+      const needed = convertAmount(ref.amount, ref.unit, ing.unit);
+      if (ing.quantity >= needed) {
+        return { ok: true, chosen: ing, needed, isDefault: ing.id === cat.defaultIngredientId || !cat.defaultIngredientId, label: cat.name };
+      }
+    }
+    const primary = ordered[0] || null;
+    const needed = primary ? convertAmount(ref.amount, ref.unit, primary.unit) : ref.amount;
+    return { ok: false, chosen: primary, needed, have: primary ? primary.quantity : 0, isDefault: true, label: cat ? cat.name : "Categoría eliminada" };
   }
-  const primary = ordered[0] || null;
-  const needed = primary ? convertAmount(ri.amount, ri.unit, primary.unit) : ri.amount;
-  return { ok: false, chosen: primary, needed, have: primary ? primary.quantity : 0, isDefault: true };
-}
-
-function slotStatus(ri, ingredientsById) {
-  const ing = ingredientsById[ri.ingredientId];
+  const ing = ingredientsById[ref.ingredientId];
   const have = ing ? ing.quantity : 0;
-  const needed = ing ? convertAmount(ri.amount, ri.unit, ing.unit) : ri.amount;
+  const needed = ing ? convertAmount(ref.amount, ref.unit, ing.unit) : ref.amount;
   const ok = !!ing && have >= needed;
-  let altOk = false, altHave = 0, altNeeded = 0, altIng = null;
-  if (ri.alt) {
-    altIng = ingredientsById[ri.alt.ingredientId];
-    altHave = altIng ? altIng.quantity : 0;
-    altNeeded = altIng ? convertAmount(ri.alt.amount, ri.alt.unit, altIng.unit) : ri.alt.amount;
-    altOk = !!altIng && altHave >= altNeeded;
-  }
-  return { ing, have, needed, ok, altIng, altHave, altNeeded, altOk };
+  return { ok, chosen: ing || null, needed, have, isDefault: true, label: ing ? ing.name : "Ingrediente eliminado" };
 }
 
 function recipeAvailability(recipe, ingredients, ingredientsById, categoriesById) {
   let missing = [];
   let usedAlt = false;
   for (const ri of recipe.mainIngredients) {
-    if (ri.categoryId) {
-      const r = resolveCategorySlot(ri, ingredients, categoriesById || {});
-      if (r.ok) { if (!r.isDefault) usedAlt = true; continue; }
-      const cat = (categoriesById || {})[ri.categoryId];
-      missing.push({
-        ...ri, have: r.have || 0, need: +(r.needed - (r.have || 0)).toFixed(2),
-        name: cat ? cat.name : "Categoría eliminada", unit: r.chosen ? r.chosen.unit : ri.unit,
-      });
+    const primary = resolveSlot(ri, ingredients, ingredientsById, categoriesById);
+    if (primary.ok) {
+      if (ri.categoryId && !primary.isDefault) usedAlt = true;
       continue;
     }
-    const s = slotStatus(ri, ingredientsById);
-    if (s.ok) continue;
-    if (ri.alt && s.altOk) { usedAlt = true; continue; }
+    if (ri.alt) {
+      const altRes = resolveSlot(ri.alt, ingredients, ingredientsById, categoriesById);
+      if (altRes.ok) { usedAlt = true; continue; }
+    }
     missing.push({
-      ...ri, have: s.have, need: +(s.needed - s.have).toFixed(2),
-      name: s.ing ? s.ing.name : "Ingrediente eliminado", unit: s.ing ? s.ing.unit : ri.unit,
+      ...ri, have: primary.have || 0, need: +(primary.needed - (primary.have || 0)).toFixed(2),
+      name: primary.label, unit: primary.chosen ? primary.chosen.unit : ri.unit,
     });
   }
   return { available: missing.length === 0, missing, usedAlt: missing.length === 0 && usedAlt };
@@ -222,12 +214,11 @@ function recipeCost(recipe, ingredients, ingredientsById, categoriesById) {
   let counted = 0;
   let missingPrice = false;
   recipe.mainIngredients.forEach((mi) => {
-    let ing;
-    if (mi.categoryId) {
-      const r = resolveCategorySlot(mi, ingredients, categoriesById || {});
-      ing = r.chosen;
-    } else {
-      ing = ingredientsById[mi.ingredientId];
+    let res = resolveSlot(mi, ingredients, ingredientsById, categoriesById);
+    let ing = res.chosen;
+    if (!res.ok && mi.alt) {
+      const altRes = resolveSlot(mi.alt, ingredients, ingredientsById, categoriesById);
+      if (altRes.chosen) ing = altRes.chosen;
     }
     if (!ing || ing.price == null || !ing.parLevel) { missingPrice = true; return; }
     const amt = convertAmount(mi.amount, mi.unit, ing.unit);
@@ -606,12 +597,8 @@ function CocktailApp({ username, onLogout }) {
   }
   function addAllRecipeIngredientsToShoppingList(recipe) {
     addItemsToShoppingList(recipe.mainIngredients.map((mi) => {
-      if (mi.categoryId) {
-        const r = resolveCategorySlot(mi, ingredients, categoriesById);
-        return { ingredientId: r.chosen ? r.chosen.id : null, name: r.chosen ? r.chosen.name : (categoriesById[mi.categoryId]?.name || "Categoría eliminada"), amount: mi.amount, unit: mi.unit };
-      }
-      const ing = ingredientsById[mi.ingredientId];
-      return { ingredientId: mi.ingredientId, name: ing ? ing.name : "Ingrediente eliminado", amount: mi.amount, unit: mi.unit };
+      const r = resolveSlot(mi, ingredients, ingredientsById, categoriesById);
+      return { ingredientId: r.chosen ? r.chosen.id : null, name: r.label, amount: mi.amount, unit: mi.unit };
     }), recipe.name);
   }
   function addIngredientToShoppingList(ing) {
@@ -624,20 +611,17 @@ function CocktailApp({ username, onLogout }) {
   function markRecipeMade(recipe) {
     const consumptions = [];
     recipe.mainIngredients.forEach((mi) => {
-      if (mi.categoryId) {
-        const r = resolveCategorySlot(mi, ingredients, categoriesById);
-        if (r.chosen) consumptions.push({ ingredientId: r.chosen.id, amount: r.needed });
+      const primary = resolveSlot(mi, ingredients, ingredientsById, categoriesById);
+      if (primary.ok) {
+        consumptions.push({ ingredientId: primary.chosen.id, amount: primary.needed });
         return;
       }
-      const s = slotStatus(mi, ingredientsById);
-      if (s.ing && s.ok) {
-        consumptions.push({ ingredientId: s.ing.id, amount: s.needed });
-      } else if (mi.alt && s.altOk) {
-        consumptions.push({ ingredientId: s.altIng.id, amount: s.altNeeded });
-      } else if (s.ing) {
-        // ni el principal ni la alternativa llegan: se descuenta el principal (clamado a 0)
-        consumptions.push({ ingredientId: s.ing.id, amount: s.needed });
+      if (mi.alt) {
+        const altRes = resolveSlot(mi.alt, ingredients, ingredientsById, categoriesById);
+        if (altRes.ok) { consumptions.push({ ingredientId: altRes.chosen.id, amount: altRes.needed }); return; }
       }
+      // ni el principal ni la alternativa llegan: se descuenta el principal (clamado a 0)
+      if (primary.chosen) consumptions.push({ ingredientId: primary.chosen.id, amount: primary.needed });
     });
     setIngredients((prev) => prev.map((ing) => {
       const total = consumptions.filter((c) => c.ingredientId === ing.id).reduce((sum, c) => sum + c.amount, 0);
@@ -1341,19 +1325,8 @@ function RecetasTab({ recipes, search, setSearch, onNew, onView, onAddToShopping
   );
 }
 
-function resolveIngredientId({ activeId, query, ingredients, onCreateIngredient }) {
-  if (activeId) {
-    const stillExists = ingredients.find((i) => i.id === activeId);
-    if (stillExists) return activeId;
-  }
-  const exact = ingredients.find((i) => i.name.toLowerCase() === query.trim().toLowerCase());
-  if (exact) return exact.id;
-  if (query.trim()) return onCreateIngredient(query.trim())?.id || null;
-  return null;
-}
-
-// Igual que resolveIngredientId, pero también puede resolver a una categoría
-// (usado solo por el picker principal de ingredientes de receta).
+// Resuelve la elección del picker principal de ingredientes de receta (o de la
+// alternativa): puede resultar en un ingrediente concreto o en una categoría.
 function resolveSlotRef({ activeId, query, ingredients, categories, onCreateIngredient }) {
   if (activeId) {
     if (activeId.startsWith("cat:")) {
@@ -1474,23 +1447,24 @@ function IngredientCombo({ ingredients, categories, query, setQuery, activeId, s
   );
 }
 
-function AltEditor({ ingredients, onCreateIngredient, onConfirm, onCancel }) {
+function AltEditor({ ingredients, categories, onCreateIngredient, onConfirm, onCancel }) {
   const [query, setQuery] = useState("");
   const [activeId, setActiveId] = useState(null);
   const [amount, setAmount] = useState(30);
   const [unit, setUnit] = useState("ml");
 
   function confirm() {
-    const id = resolveIngredientId({ activeId, query, ingredients, onCreateIngredient });
-    if (!id) return;
+    const ref = resolveSlotRef({ activeId, query, ingredients, categories: categories || [], onCreateIngredient });
+    if (!ref) return;
     const amt = Math.max(0, parseFloat(amount) || 0);
     if (amt <= 0) return;
-    onConfirm({ ingredientId: id, amount: amt, unit });
+    if (ref.kind === "category") onConfirm({ categoryId: ref.id, amount: amt, unit });
+    else onConfirm({ ingredientId: ref.id, amount: amt, unit });
   }
 
   return (
     <div className="alt-row-edit">
-      <IngredientCombo ingredients={ingredients} query={query} setQuery={setQuery} activeId={activeId} setActiveId={setActiveId} onCreateIngredient={onCreateIngredient} placeholder="Ingrediente alternativo…" autoFocus />
+      <IngredientCombo ingredients={ingredients} categories={categories} query={query} setQuery={setQuery} activeId={activeId} setActiveId={setActiveId} onCreateIngredient={onCreateIngredient} placeholder="Ingrediente o categoría alternativa…" autoFocus />
       <input type="number" min="0" step="any" value={amount} onChange={(e) => setAmount(e.target.value)} style={{ width: 56 }} />
       <select value={unit} onChange={(e) => setUnit(e.target.value)} style={{ width: 80 }}>{UNITS.map((u) => <option key={u} value={u}>{u}</option>)}</select>
       <button type="button" className="icon-btn" onClick={confirm}><Check size={14} /></button>
@@ -1544,7 +1518,8 @@ function IngredientPicker({ ingredients, categories, items, setItems, onCreateIn
             const isCat = !!it.categoryId;
             const cat = isCat ? (categories || []).find((c) => c.id === it.categoryId) : null;
             const ing = !isCat ? ingredients.find((i) => i.id === it.ingredientId) : null;
-            const altIng = it.alt ? ingredients.find((i) => i.id === it.alt.ingredientId) : null;
+            const altIng = it.alt && !it.alt.categoryId ? ingredients.find((i) => i.id === it.alt.ingredientId) : null;
+            const altCat = it.alt?.categoryId ? (categories || []).find((c) => c.id === it.alt.categoryId) : null;
             return (
               <li
                 key={idx}
@@ -1563,24 +1538,24 @@ function IngredientPicker({ ingredients, categories, items, setItems, onCreateIn
                   <span className="picked-amount">{it.amount} {it.unit}</span>
                   <button type="button" onClick={() => remove(idx)}><X size={13} /></button>
                 </div>
-                {!isCat && (
-                  it.alt ? (
-                    <div className="picked-alt">
-                      <span className="alt-tag">alt.</span>
-                      <span>{altIng ? altIng.name : "?"}</span>
-                      <span className="picked-amount">{it.alt.amount} {it.alt.unit}</span>
-                      <button type="button" onClick={() => removeAlt(idx)}><X size={13} /></button>
-                    </div>
-                  ) : altEditingIdx === idx ? (
-                    <AltEditor
-                      ingredients={ingredients}
-                      onCreateIngredient={onCreateIngredient}
-                      onConfirm={(alt) => { setAlt(idx, alt); setAltEditingIdx(null); }}
-                      onCancel={() => setAltEditingIdx(null)}
-                    />
-                  ) : (
-                    <button type="button" className="add-alt-btn" onClick={() => setAltEditingIdx(idx)}><Plus size={12} /> Alternativa</button>
-                  )
+                {it.alt ? (
+                  <div className="picked-alt">
+                    <span className="alt-tag">alt.</span>
+                    {it.alt.categoryId && <span className="alt-tag">categoría</span>}
+                    <span>{it.alt.categoryId ? (altCat ? altCat.name : "Categoría eliminada") : (altIng ? altIng.name : "?")}</span>
+                    <span className="picked-amount">{it.alt.amount} {it.alt.unit}</span>
+                    <button type="button" onClick={() => removeAlt(idx)}><X size={13} /></button>
+                  </div>
+                ) : altEditingIdx === idx ? (
+                  <AltEditor
+                    ingredients={ingredients}
+                    categories={categories}
+                    onCreateIngredient={onCreateIngredient}
+                    onConfirm={(alt) => { setAlt(idx, alt); setAltEditingIdx(null); }}
+                    onCancel={() => setAltEditingIdx(null)}
+                  />
+                ) : (
+                  <button type="button" className="add-alt-btn" onClick={() => setAltEditingIdx(idx)}><Plus size={12} /> Alternativa</button>
                 )}
               </li>
             );
@@ -1691,37 +1666,26 @@ function RecipeDetail({ recipe, ingredients, ingredientsById, categoriesById, on
         <ul className="detail-ing-list">
           {recipe.mainIngredients.map((mi, idx) => {
             const m = recipe.missing?.find((x) => (mi.categoryId ? x.categoryId === mi.categoryId : x.ingredientId === mi.ingredientId));
-            if (mi.categoryId) {
-              const cat = categoriesById[mi.categoryId];
-              const r = resolveCategorySlot(mi, ingredients, categoriesById);
-              return (
-                <li key={idx} className={m ? "detail-ing-missing" : ""}>
-                  <div>
-                    {mi.amount} {mi.unit} — {cat ? cat.name : "Categoría eliminada"} <span className="alt-tag">categoría</span>
-                    {m && <span className="missing-tag">faltan {m.need} {m.unit}</span>}
-                  </div>
-                  {r.chosen && (
-                    <div className="detail-alt-line">
-                      ↳ marca usada: {r.chosen.name}{!r.isDefault && <span className="alt-in-use"> (no es la recomendada)</span>}
-                    </div>
-                  )}
-                </li>
-              );
-            }
-            const ing = ingredientsById[mi.ingredientId];
-            const altIng = mi.alt ? ingredientsById[mi.alt.ingredientId] : null;
-            const s = slotStatus(mi, ingredientsById);
+            const primary = resolveSlot(mi, ingredients, ingredientsById, categoriesById);
+            const altRes = mi.alt ? resolveSlot(mi.alt, ingredients, ingredientsById, categoriesById) : null;
             return (
               <li key={idx} className={m ? "detail-ing-missing" : ""}>
                 <div>
-                  {mi.amount} {mi.unit} — {ing ? ing.name : "Ingrediente eliminado"}
+                  {mi.amount} {mi.unit} — {primary.label}
+                  {mi.categoryId && <span className="alt-tag">categoría</span>}
                   {m && <span className="missing-tag">faltan {m.need} {m.unit}</span>}
                 </div>
+                {mi.categoryId && primary.chosen && (
+                  <div className="detail-alt-line">
+                    ↳ marca usada: {primary.chosen.name}{!primary.isDefault && <span className="alt-in-use"> (no es la recomendada)</span>}
+                  </div>
+                )}
                 {mi.alt && (
                   <div className="detail-alt-line">
-                    ↳ alternativa: {mi.alt.amount} {mi.alt.unit} de {altIng ? altIng.name : "Ingrediente eliminado"}
-                    {!s.ok && s.altOk && <span className="alt-in-use"> (en uso)</span>}
-                    {!s.ok && !s.altOk && <span className="missing-tag"> también falta</span>}
+                    ↳ alternativa: {mi.alt.amount} {mi.alt.unit} de {altRes.label}
+                    {mi.alt.categoryId && <span className="alt-tag">categoría</span>}
+                    {!primary.ok && altRes.ok && <span className="alt-in-use"> (en uso{mi.alt.categoryId && altRes.chosen ? `: ${altRes.chosen.name}` : ""})</span>}
+                    {!primary.ok && !altRes.ok && <span className="missing-tag"> también falta</span>}
                   </div>
                 )}
               </li>

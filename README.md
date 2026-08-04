@@ -1,98 +1,89 @@
-# Cocktailbrary v1.1 — despliegue con Docker
+# CocktailBrary 🍸📚
 
-Backend real (Node + Express + SQLite, autenticación con bcrypt + JWT) sirviendo el
-frontend ya compilado, todo en una sola imagen Docker basada en Alpine.
+> **Cocktail + Library** | Gestión personal de recetas e inventario de coctelería en formato PWA.
 
-## Arrancarlo
+---
 
-1. Descomprime el proyecto y entra en la carpeta.
-2. (Recomendado) define un secreto propio para firmar los tokens de sesión:
+## ⚠️ ADVERTENCIA
 
-   ```bash
-   export JWT_SECRET=$(openssl rand -hex 32)
-   ```
+Este proyecto ha sido desarrollado completamente con el uso de **Inteligencia Artificial** y **no se recomienda su uso en un entorno profesional**, debido a que el código no ha sido auditado ni comprobado exhaustivamente por un ser humano.
 
-3. Levanta todo:
+Dicho esto, la aplicación es **completamente funcional para un uso personal** y no se han detectado *bugs* durante el uso habitual.
 
-   ```bash
-   docker compose up --build
-   ```
+---
 
-4. Abre `http://localhost:3000` (o `http://IP-DEL-SERVIDOR:3000` desde otro dispositivo
-   en la misma red). Crea tu usuario desde la pantalla de login — cada usuario tiene su
-   inventario, recetas y compra separados, sincronizados entre todos los dispositivos
-   donde inicies sesión con esa cuenta.
+## ℹ️ ACERCA DEL PROYECTO
 
-Para pararlo: `docker compose down` (los datos persisten). Para borrar también los
-datos: `docker compose down -v`.
+**CocktailBrary** es una Progressive Web App (PWA) diseñada para ayudarte a gestionar de forma centralizada tu recetario e inventario personal de cócteles.
 
-## Qué hay dentro
+---
 
-- **`server/`** — API en Express. SQLite en un único fichero (`better-sqlite3`),
-  contraseñas con `bcrypt`, sesiones con JWT (30 días de validez).
-- **`client/`** — la app en React (Vite). En producción se compila a estático y el
-  propio backend lo sirve, así que solo hay un contenedor y un puerto.
-- **`Dockerfile`** — build en 3 fases: compila el frontend, instala las dependencias
-  del backend (incluye las herramientas para compilar `better-sqlite3` si hiciera
-  falta), y la imagen final solo lleva lo justo para ejecutar. Todo sobre
-  `node:22-alpine` por tamaño y consumo de recursos.
-- **`docker-compose.yml`** — expone el puerto 3000 y monta un volumen (`coctelaria-data`)
-  donde vive el fichero SQLite, para que los datos sobrevivan a reinicios y
-  actualizaciones del contenedor.
+## 🚀 MODO DE USO
 
-## Variables de entorno
+1. **Gestión de Recetas:** Añade tus recetas, imágenes, enlaces de compra, método de preparación y notas personalizadas para cada bebida.
+2. **Inventario Personal:** Registra todos los licores e ingredientes que tienes en casa. En la pestaña **Home** se mostrarán automáticamente todas las recetas que puedes preparar con lo que tienes disponible.
+3. **Lista de la Compra:** Si te falta algún ingrediente para un cóctel, puedes agregarlo directamente a la lista con un solo clic.
 
-| Variable     | Por defecto                | Para qué sirve                                  |
-|--------------|-----------------------------|--------------------------------------------------|
-| `JWT_SECRET` | valor de ejemplo (¡cámbialo!) | Firma los tokens de sesión. Si lo cambias, todos los usuarios tendrán que volver a iniciar sesión. |
-| `PORT`       | `3000`                      | Puerto interno del servidor.                     |
-| `DB_PATH`    | `/data/coctelaria.db`       | Ruta del fichero SQLite (dentro del volumen).    |
+---
 
-## Actualizar la app sin perder datos
+## ✨ OTRAS FUNCIONES
 
+* 👥 **Soporte Multiusuario:** Permite habilitar o deshabilitar el registro de nuevos usuarios mediante variables de entorno para compartir la aplicación.
+* 📖 **Wiki Integrada:** Añade notas personales organizadas (ideal para documentar tipos de cristalería, técnicas de mezclado o historia).
+* 📊 **Métricas e Insights:** Consulta estadísticas sencillas y útiles, como tus cócteles e ingredientes más usados, o el coste estimado por bebida.
+* 💾 **Exportación de Datos:** Exporta toda tu información y base de datos en formato `JSON` en cualquier momento.
+
+---
+
+## 🛠️ INSTALACIÓN Y DESPLIEGUE
+
+### 1. Clonar el repositorio
 ```bash
-git pull   # o copia los archivos nuevos
-docker compose up --build -d
+git clone https://github.com/tu-usuario/cocktailbrary.git
+cd cocktailbrary
 ```
 
-El volumen `coctelaria-data` no se toca al reconstruir la imagen, así que usuarios,
-inventario y recetas se mantienen.
+### 2. Configurar variables de entorno (`.env`)
+Crea un archivo `.env` en la raíz del proyecto basándote en la siguiente estructura:
 
-## Copias de seguridad
-
-Todo vive en un único fichero SQLite dentro del volumen. Para sacar una copia:
-
-```bash
-docker compose exec coctelaria sh -c "cat /data/coctelaria.db" > backup-coctelaria.db
+```env
+JWT_SECRET=tu_secreto_generado_aqui
+PORT=3000
+EXTERNAL_PORT=3000
 ```
 
-## Instalarla en Android (PWA)
+> **Tip:** Puedes generar un `JWT_SECRET` seguro ejecutando en tu terminal:
+> ```bash
+> openssl rand -hex 32
+> ```
 
-Desde julio de 2026 la app es una PWA de verdad: manifest, iconos propios y un
-service worker que cachea el "cascarón" (JS/CSS) para que cargue al instante.
-Los datos (inventario, recetas...) **siempre** se piden en directo al servidor —
-no hay caché de datos, así que no verás información desfasada.
+### 3. Levantar con Docker Compose
+Para construir la imagen y levantar el contenedor en segundo plano, ejecuta:
 
-Para instalarla:
+```bash
+docker compose up -d --build
+```
 
-1. **Requisito real, no opcional**: los service workers (la pieza que hace posible instalarla) solo funcionan en un "contexto seguro" — o sea, HTTPS, o `localhost` sin más. Una IP de tu red local por HTTP plano (`http://192.168.1.x:3000`) **no cuenta**, así que el navegador no ofrecerá instalarla así. Como ya tienes montada tu propia infraestructura de HTTPS, ponla delante de este contenedor y accede a través de ella.
-2. Abre esa URL con Chrome en el móvil.
-3. Chrome mostrará un banner de "Añadir a la pantalla de inicio", o desde el menú (⋮) → "Instalar aplicación".
-4. Queda instalada con su propio icono, abre en su propia ventana sin barra de navegador, y aparece en el selector de apps recientes como cualquier otra app.
+---
 
-Si cambias el código, `registerType: "autoUpdate"` hace que la próxima vez que
-se abra la app compruebe si hay una versión nueva del cascarón y la actualice
-sola, sin que tengas que desinstalar/reinstalar nada.
+## 🐳 DOCKER COMPOSE CONFIGURATION
 
-## Nota honesta sobre las pruebas
+A continuación se muestra la estructura del `docker-compose.yml` que utiliza el proyecto:
 
-He probado el backend (registro, login, guardado y lectura de datos, rechazo de
-credenciales/tokens inválidos) y la build de producción del frontend ejecutándolos
-directamente con Node fuera de Docker, y funcionan correctamente juntos (el backend
-sirviendo el frontend compilado). También he comprobado que el manifest, el service
-worker y los iconos se sirven con los tipos de contenido correctos. Lo que **no** he
-podido probar aquí es el propio `docker build`, porque este entorno no tiene Docker
-instalado. Si al construir la imagen `better-sqlite3` diera problemas para compilar
-en Alpine (es la única pieza con código nativo), la alternativa más simple es cambiar
-la imagen base del `Dockerfile` de `node:22-alpine` a `node:22-slim` (Debian), algo
-más pesada pero con menos sorpresas de compatibilidad.
+```yaml
+services:
+  cocktailbrary:
+    build: .
+    image: cocktailbrary:1.6
+    container_name: cocktailbrary
+    restart: unless-stopped
+    ports:
+      - "${EXTERNAL_PORT:-3000}:${PORT:-3000}"
+    environment:
+      JWT_SECRET: ${JWT_SECRET}
+      ALLOW_REGISTRATION: "false" # "true" o "false" para permitir nuevos registros
+      PORT: ${PORT:-3000}
+      DB_PATH: /data/coctelaria.db
+    volumes:
+      - ./cocktailbrary/data:/data
+```

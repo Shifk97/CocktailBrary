@@ -10,7 +10,7 @@ services:
       # Cambia esto por un valor propio y secreto antes de usarlo en serio.
       # Genera uno con: openssl rand -hex 32
       JWT_SECRET: "${JWT_SECRET:-cambia-este-secreto-en-produccion}"
-      PORT: 3000
+      PORT: ${PORT}
       DB_PATH: /data/coctelaria.db
       # Pon "false" para impedir que se creen usuarios nuevos desde la pantalla de login
       ALLOW_REGISTRATION: "true"

@@ -360,6 +360,9 @@ function CocktailApp({ username, onLogout }) {
   const [editingManual, setEditingManual] = useState(null);
   const [viewingManual, setViewingManual] = useState(null);
   const [showCategoryForm, setShowCategoryForm] = useState(false);
+  const [haConfigured, setHaConfigured] = useState(false);
+  const [haListEntityId, setHaListEntityId] = useState("");
+  const [haUrl, setHaUrl] = useState("");
   const [editingCategory, setEditingCategory] = useState(null);
 
   useEffect(() => {
@@ -380,6 +383,7 @@ function CocktailApp({ username, onLogout }) {
       setCategories(c);
       setLoaded(true);
     })();
+    api.haGetConfig().then((cfg) => { setHaConfigured(cfg.configured); setHaUrl(cfg.url); setHaListEntityId(cfg.listEntityId || ""); }).catch(() => {});
   }, [username]);
 
   useEffect(() => { if (loaded) storageSet("ingredients", ingredients); }, [ingredients, loaded]);
@@ -568,6 +572,26 @@ function CocktailApp({ username, onLogout }) {
     await api.changePassword(currentPassword, newPassword);
   }
 
+  async function haSaveConfig(url, token, listEntityId) {
+    const r = await api.haSaveConfig(url, token, listEntityId);
+    setHaConfigured(r.configured);
+    setHaUrl(url);
+    setHaListEntityId(r.listEntityId || "");
+  }
+  async function haTestConfig(url, token) {
+    await api.haTestConfig(url, token);
+  }
+  async function haLoadLists(url, token) {
+    const r = await api.haGetLists(url, token);
+    return r.lists;
+  }
+  async function haDeleteConfig() {
+    await api.haDeleteConfig();
+    setHaConfigured(false);
+    setHaUrl("");
+    setHaListEntityId("");
+  }
+
   function saveRecipe(data) {
     if (data.id) setRecipes((prev) => prev.map((r) => (r.id === data.id ? data : r)));
     else setRecipes((prev) => [...prev, { ...data, id: uid(), timesMade: 0 }]);
@@ -589,16 +613,27 @@ function CocktailApp({ username, onLogout }) {
   }
 
   function addItemsToShoppingList(items, sourceLabel) {
-    setShoppingList((prev) => {
-      const next = [...prev];
-      items.forEach((m) => {
-        const exists = m.ingredientId && next.find((x) => x.ingredientId === m.ingredientId && !x.checked);
-        if (exists) exists.amount = Math.max(exists.amount, m.amount);
-        else next.push({ id: uid(), ingredientId: m.ingredientId, name: m.name, amount: Math.ceil(m.amount), unit: m.unit, checked: false, fromRecipe: sourceLabel || null });
-      });
-      return next;
+    const newlyAdded = [];
+    const next = [...shoppingList];
+    items.forEach((m) => {
+      const exists = m.ingredientId && next.find((x) => x.ingredientId === m.ingredientId && !x.checked);
+      if (exists) {
+        exists.amount = Math.max(exists.amount, m.amount);
+      } else {
+        const entry = { id: uid(), ingredientId: m.ingredientId, name: m.name, amount: Math.ceil(m.amount), unit: m.unit, checked: false, fromRecipe: sourceLabel || null };
+        next.push(entry);
+        newlyAdded.push(entry);
+      }
     });
+    setShoppingList(next);
     showToast(sourceLabel ? `Ingredientes de "${sourceLabel}" añadidos a la compra` : `${items[0]?.name || "Ingrediente"} añadido a la compra`);
+    pushToHomeAssistant(newlyAdded);
+  }
+  function pushToHomeAssistant(items) {
+    if (!haConfigured || !items.length) return;
+    items.forEach((m) => {
+      api.haAddItem(m.name).catch(() => { /* fallo silencioso: mejor esfuerzo, no bloquea la app */ });
+    });
   }
   function addMissingToShoppingList(recipe, missing) {
     addItemsToShoppingList(missing.map((m) => ({ ingredientId: m.categoryId ? null : m.ingredientId, name: m.name, amount: m.need, unit: m.unit })), recipe.name);
@@ -670,7 +705,7 @@ function CocktailApp({ username, onLogout }) {
   function addManualShoppingItem(name, amount, unit) {
     if (!name.trim()) return;
     const amt = Math.max(0.01, parseFloat(amount) || 1);
-    setShoppingList((prev) => [...prev, { id: uid(), ingredientId: null, name, amount: amt, unit: unit || "unidades", checked: false, fromRecipe: null }]);
+    addItemsToShoppingList([{ ingredientId: null, name: name.trim(), amount: amt, unit: unit || "unidades" }]);
   }
 
   if (!loaded) {
@@ -775,7 +810,14 @@ function CocktailApp({ username, onLogout }) {
             onView={setViewingManual}
           />
         )}
-        {tab === "ajustes" && <AjustesTab settings={settings} setSettings={setSettings} counts={{ ingredients: ingredients.length, recipes: recipes.length }} username={username} onExport={exportData} onImport={importData} onChangePassword={changePassword} />}
+        {tab === "ajustes" && (
+          <AjustesTab
+            settings={settings} setSettings={setSettings}
+            counts={{ ingredients: ingredients.length, recipes: recipes.length }}
+            username={username} onExport={exportData} onImport={importData} onChangePassword={changePassword}
+            haConfigured={haConfigured} haUrl={haUrl} haListEntityId={haListEntityId} onHaSave={haSaveConfig} onHaTest={haTestConfig} onHaLoadLists={haLoadLists} onHaDelete={haDeleteConfig}
+          />
+        )}
       </main>
 
       {showManualForm && (
@@ -2012,13 +2054,20 @@ function CompraTab({ items, archivedRecipes, onToggle, onRemove, onClear, onAdd,
 }
 
 // ---------- AJUSTES ----------
-function AjustesTab({ settings, setSettings, counts, username, onExport, onImport, onChangePassword }) {
+function AjustesTab({ settings, setSettings, counts, username, onExport, onImport, onChangePassword, haConfigured, haUrl, haListEntityId, onHaSave, onHaTest, onHaLoadLists, onHaDelete }) {
   const importRef = useRef(null);
   const [currentPw, setCurrentPw] = useState("");
   const [newPw, setNewPw] = useState("");
   const [newPw2, setNewPw2] = useState("");
   const [pwStatus, setPwStatus] = useState(null); // { type: "error"|"success", text }
   const [pwBusy, setPwBusy] = useState(false);
+
+  const [haUrlInput, setHaUrlInput] = useState(haUrl || "");
+  const [haToken, setHaToken] = useState("");
+  const [haBusy, setHaBusy] = useState(false);
+  const [haStatus, setHaStatus] = useState(null);
+  const [haLists, setHaLists] = useState(null);
+  const [haListEntityIdInput, setHaListEntityIdInput] = useState(haListEntityId || "");
 
   function handleImportFile(e) {
     const file = e.target.files[0];
@@ -2042,6 +2091,63 @@ function AjustesTab({ settings, setSettings, counts, username, onExport, onImpor
     setPwBusy(false);
   }
 
+  async function handleHaTest() {
+    setHaStatus(null);
+    if (!haUrlInput.trim() || (!haToken.trim() && !haConfigured)) { setHaStatus({ type: "error", text: "Rellena la URL y el token." }); return; }
+    setHaBusy(true);
+    try {
+      await onHaTest(haUrlInput.trim(), haToken.trim());
+      setHaStatus({ type: "success", text: "Conexión correcta." });
+    } catch (err) {
+      setHaStatus({ type: "error", text: err.message || "No se ha podido conectar." });
+    }
+    setHaBusy(false);
+  }
+  async function handleHaLoadLists() {
+    setHaStatus(null);
+    if (!haUrlInput.trim() || (!haToken.trim() && !haConfigured)) { setHaStatus({ type: "error", text: "Rellena la URL y el token primero." }); return; }
+    setHaBusy(true);
+    try {
+      const lists = await onHaLoadLists(haUrlInput.trim(), haToken.trim());
+      setHaLists(lists);
+      if (lists.length === 0) setHaStatus({ type: "error", text: "No se ha encontrado ninguna lista de tareas en esa instancia." });
+      else setHaStatus({ type: "success", text: `${lists.length} lista${lists.length === 1 ? "" : "s"} encontrada${lists.length === 1 ? "" : "s"}. Elige una abajo.` });
+    } catch (err) {
+      setHaStatus({ type: "error", text: err.message || "No se han podido cargar las listas." });
+    }
+    setHaBusy(false);
+  }
+  async function handleHaSave() {
+    setHaStatus(null);
+    if (!haUrlInput.trim()) { setHaStatus({ type: "error", text: "Falta la URL." }); return; }
+    if (!haToken.trim() && !haConfigured) { setHaStatus({ type: "error", text: "Falta el token de acceso." }); return; }
+    if (!haListEntityIdInput) { setHaStatus({ type: "error", text: "Elige a qué lista quieres enviar los ingredientes." }); return; }
+    setHaBusy(true);
+    try {
+      await onHaSave(haUrlInput.trim(), haToken.trim(), haListEntityIdInput);
+      setHaStatus({ type: "success", text: "Guardado. Los ingredientes que añadas a la compra se enviarán también a esa lista de Home Assistant." });
+      setHaToken("");
+    } catch (err) {
+      setHaStatus({ type: "error", text: err.message || "No se ha podido guardar." });
+    }
+    setHaBusy(false);
+  }
+  async function handleHaDelete() {
+    if (!window.confirm("¿Desconectar Home Assistant? Dejará de enviarse la lista de la compra.")) return;
+    setHaBusy(true);
+    try {
+      await onHaDelete();
+      setHaUrlInput("");
+      setHaToken("");
+      setHaLists(null);
+      setHaListEntityIdInput("");
+      setHaStatus(null);
+    } catch (err) {
+      setHaStatus({ type: "error", text: err.message || "No se ha podido desconectar." });
+    }
+    setHaBusy(false);
+  }
+
   return (
     <div>
       <header className="page-header"><h1>Ajustes</h1><p className="page-sub">Personaliza tu barra.</p></header>
@@ -2062,6 +2168,37 @@ function AjustesTab({ settings, setSettings, counts, username, onExport, onImpor
           <input ref={importRef} type="file" accept="application/json" hidden onChange={handleImportFile} />
         </div>
         <p className="empty-body" style={{ margin: "6px 0 0" }}>Importar reemplaza por completo tu inventario, recetas y lista de la compra actuales.</p>
+
+        <h3 className="panel-title" style={{ marginTop: 24 }}>Home Assistant</h3>
+        <p className="empty-body" style={{ margin: "0 0 10px" }}>
+          {haConfigured
+            ? "Conectado. Lo que añadas a la lista de la compra de Cocktailbrary se envía también a la lista de tareas elegida en Home Assistant (solo en ese sentido)."
+            : "Envía automáticamente lo que añadas a la compra en Cocktailbrary a una lista de tareas de Home Assistant."}
+        </p>
+        <div className="form">
+          <input value={haUrlInput} onChange={(e) => setHaUrlInput(e.target.value)} placeholder="http://homeassistant.local:8123" />
+          <input type="password" value={haToken} onChange={(e) => setHaToken(e.target.value)} placeholder={haConfigured ? "Token de acceso (déjalo en blanco para no cambiarlo)" : "Token de acceso de larga duración"} />
+          <div className="data-actions">
+            <button className="btn btn-ghost btn-sm" onClick={handleHaTest} disabled={haBusy}>Probar conexión</button>
+            <button className="btn btn-ghost btn-sm" onClick={handleHaLoadLists} disabled={haBusy}>Cargar listas</button>
+          </div>
+
+          {(haLists || haListEntityIdInput) && (
+            <Field label="Lista de destino (el ingrediente se añade ahí)">
+              <select value={haListEntityIdInput} onChange={(e) => setHaListEntityIdInput(e.target.value)}>
+                <option value="">Elige una lista…</option>
+                {!haLists && haListEntityIdInput && <option value={haListEntityIdInput}>{haListEntityIdInput}</option>}
+                {(haLists || []).map((l) => <option key={l.entityId} value={l.entityId}>{l.name}</option>)}
+              </select>
+            </Field>
+          )}
+
+          {haStatus && <p className={haStatus.type === "error" ? "auth-error" : "pw-success"}>{haStatus.text}</p>}
+          <div className="data-actions">
+            <button className="btn btn-primary btn-sm" onClick={handleHaSave} disabled={haBusy}>Guardar</button>
+            {haConfigured && <button className="btn btn-ghost btn-sm" onClick={handleHaDelete} disabled={haBusy}>Desconectar</button>}
+          </div>
+        </div>
 
         <h3 className="panel-title" style={{ marginTop: 24 }}>Cambiar contraseña</h3>
         <form className="form" onSubmit={submitPasswordChange}>

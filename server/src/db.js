@@ -23,6 +23,15 @@ db.exec(`
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),
     PRIMARY KEY (user_id, key)
   );
+
+  CREATE TABLE IF NOT EXISTS ha_config (
+    user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    url TEXT NOT NULL,
+    token TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
 `);
+
+try { db.exec("ALTER TABLE ha_config ADD COLUMN list_entity_id TEXT"); } catch (e) { /* ya existía */ }
 
 export default db;

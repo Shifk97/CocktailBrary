@@ -5,6 +5,7 @@ import { fileURLToPath } from "url";
 import authRoutes, { registrationEnabled } from "./routes/auth.js";
 import dataRoutes from "./routes/data.js";
 import uploadsRoutes from "./routes/uploads.js";
+import haRoutes from "./routes/ha.js";
 import { requireAuth } from "./middleware.js";
 import { UPLOADS_DIR } from "./paths.js";
 
@@ -26,6 +27,7 @@ app.get("/api/me", requireAuth, (req, res) => res.json({ username: req.username 
 app.use("/api/auth", authRoutes);
 app.use("/api/data", dataRoutes);
 app.use("/api/uploads", uploadsRoutes);
+app.use("/api/ha", haRoutes);
 app.use("/uploads", express.static(UPLOADS_DIR));
 
 // Sirve el frontend ya compilado (generado por el build de Vite en la imagen Docker)
